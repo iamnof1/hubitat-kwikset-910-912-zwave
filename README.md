@@ -1,4 +1,4 @@
-# Kwikset 912 Z-Wave Lock — Hubitat Driver
+# Kwikset 912 Z-Wave Plus Lock — Hubitat Driver
 
 A Hubitat Elevation driver for the **Kwikset 912 SmartCode Z-Wave Plus deadbolt** with full Lock Code Manager integration, tamper/jam detection, and device-specific Z-Wave parsing.
 
