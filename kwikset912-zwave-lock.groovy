@@ -18,13 +18,17 @@
  * Kwikset 912 Z-Wave Lock — Hubitat Driver
  *
  * DEVICE IDENTITY
- *   The 912 SmartCode is a touchpad deadbolt.  Confirmed from Hubitat device data:
+ *   The 912 SmartCode is a Z-Wave Plus touchpad deadbolt (0x5E ZWAVEPLUS_INFO
+ *   confirmed in pairing data).  It is Z-Wave Plus Gen 1 hardware and pairs
+ *   with S0 legacy security rather than S2 — typical for devices of this era
+ *   that predate mandatory S2 certification.
+ *
+ *   Confirmed from Hubitat device data:
  *     Manufacturer : 144  (0x0090 — Kwikset / Spectrum Brands)
  *     Device Type  : 3    (0x0003)
  *     Device Id    : 825  (0x0339)
  *     S2 field     : 128  (0x80 = S0 legacy security key was granted)
- *   Despite carrying the Z-Wave Plus command class (0x5E), this device pairs
- *   with S0 security rather than S2.  Battery: 4 × AA alkaline.
+ *   Battery: 4 × AA alkaline.
  *
  * Z-WAVE COMMAND CLASSES (confirmed from "In Clusters" / "Secure In Clusters")
  *

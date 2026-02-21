@@ -1,6 +1,6 @@
 # Kwikset 912 Z-Wave Lock — Hubitat Driver
 
-A Hubitat Elevation driver for the **Kwikset 912 SmartCode Z-Wave deadbolt** with full Lock Code Manager integration, tamper/jam detection, and device-specific Z-Wave parsing.
+A Hubitat Elevation driver for the **Kwikset 912 SmartCode Z-Wave Plus deadbolt** with full Lock Code Manager integration, tamper/jam detection, and device-specific Z-Wave parsing.
 
 ---
 
@@ -53,9 +53,10 @@ Verified from Hubitat's Device Data page after pairing:
 | Manufacturer | 144 | 0x0090 (Kwikset / Spectrum Brands) |
 | Device Type | 3 | 0x0003 |
 | Device Id | 825 | 0x0339 |
+| Protocol | Z-Wave Plus | `0x5E` present in In Clusters |
 | Security | S2: 128 | 0x80 = S0 legacy security |
 
-The device advertises Z-Wave Plus (`0x5E` in In Clusters) but pairs with S0 rather than S2 security.
+The device is Z-Wave Plus (confirmed by `0x5E` ZWAVEPLUS_INFO in its cluster list) but pairs using S0 legacy security rather than S2 — common for Z-Wave Plus Gen 1 hardware that predates mandatory S2.
 
 **Non-secured command classes:** `0x5E, 0x72, 0x5A, 0x98, 0x73, 0x7A`
 
