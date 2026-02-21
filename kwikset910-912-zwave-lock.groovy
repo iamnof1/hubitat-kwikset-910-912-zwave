@@ -15,20 +15,23 @@
  *
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Kwikset 912 Z-Wave Lock — Hubitat Driver
+ * Kwikset 910 / 912 Z-Wave Plus Lock — Hubitat Driver
  *
  * DEVICE IDENTITY
- *   The 912 SmartCode is a Z-Wave Plus touchpad deadbolt (0x5E ZWAVEPLUS_INFO
- *   confirmed in pairing data).  It is Z-Wave Plus Gen 1 hardware and pairs
- *   with S0 legacy security rather than S2 — typical for devices of this era
- *   that predate mandatory S2 certification.
+ *   The 910 and 912 SmartCode are Z-Wave Plus touchpad deadbolts (0x5E
+ *   ZWAVEPLUS_INFO confirmed in pairing data for both models).  They are
+ *   Z-Wave Plus Gen 1 hardware and pair with S0 legacy security rather than
+ *   S2 — typical for devices of this era that predate mandatory S2.
+ *   Battery: 4 × AA alkaline.
  *
- *   Confirmed from Hubitat device data:
+ *   Both models confirmed from Hubitat device data:
  *     Manufacturer : 144  (0x0090 — Kwikset / Spectrum Brands)
  *     Device Type  : 3    (0x0003)
- *     Device Id    : 825  (0x0339)
+ *     Device Id    : 825  (0x0339) — 912
+ *                    568  (0x0238) — 910
  *     S2 field     : 128  (0x80 = S0 legacy security key was granted)
- *   Battery: 4 × AA alkaline.
+ *   Command class lists (In Clusters / Secure In Clusters) are identical
+ *   between the two models — the driver logic is shared in full.
  *
  * Z-WAVE COMMAND CLASSES (confirmed from "In Clusters" / "Secure In Clusters")
  *
@@ -134,7 +137,7 @@ import groovy.transform.Field
 
 metadata {
     definition(
-        name:      "Kwikset 912 Z-Wave Lock",
+        name:      "Kwikset 910/912 Z-Wave Plus Lock",
         namespace: "community",
         author:    "Custom"
     ) {
@@ -153,11 +156,14 @@ metadata {
 
         command "clearCodes", []   // clears all PIN codes from the lock AND local state
 
-        // ── Fingerprint ───────────────────────────────────────────────────────
-        // Confirmed from Hubitat device data:
-        //   Manufacturer 144 → 0x0090  |  Device Type 3 → 0x0003  |  Device Id 825 → 0x0339
+        // ── Fingerprints ─────────────────────────────────────────────────────
+        // Both confirmed from Hubitat device data.
+        // mfr 0x0090 (Kwikset), prod 0x0003 — identical command class lists.
+        // Only the Device Id differs between the two models.
         fingerprint mfr: "0090", prod: "0003", deviceId: "0339",
-            deviceJoinName: "Kwikset 912 Deadbolt"
+            deviceJoinName: "Kwikset 912 Deadbolt"   // Device Id 825
+        fingerprint mfr: "0090", prod: "0003", deviceId: "0238",
+            deviceJoinName: "Kwikset 910 Deadbolt"   // Device Id 568
     }
 
     preferences {

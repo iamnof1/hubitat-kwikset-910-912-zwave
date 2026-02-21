@@ -1,6 +1,6 @@
-# Kwikset 912 Z-Wave Plus Lock — Hubitat Driver
+# Kwikset 910/912 Z-Wave Plus Lock — Hubitat Driver
 
-A Hubitat Elevation driver for the **Kwikset 912 SmartCode Z-Wave Plus deadbolt** with full Lock Code Manager integration, tamper/jam detection, and device-specific Z-Wave parsing.
+A Hubitat Elevation driver for the **Kwikset 910 and 912 SmartCode Z-Wave Plus deadbolts** with full Lock Code Manager integration, tamper/jam detection, and device-specific Z-Wave parsing.
 
 ---
 
@@ -12,7 +12,7 @@ The Generic Z-Wave Lock driver that ships with Hubitat is generally competent an
 
 Every Z-Wave device advertises which command class versions it supports. Hubitat's `zwave.parse()` uses the version map you provide to select the right parser for each incoming frame — if the version is wrong, fields can come back empty or misread.
 
-The Generic driver uses conservative fallback versions that work across many devices. This driver uses the exact versions confirmed from this device's own pairing data:
+The Generic driver uses conservative fallback versions that work across many devices. This driver uses the exact versions confirmed from these devices' own pairing data:
 
 | Class | Hex | Version used |
 |---|---|---|
@@ -46,17 +46,17 @@ When a keypad event fires the `lock` event, this driver includes `[usedCode: slo
 
 ## Confirmed device identity
 
-Verified from Hubitat's Device Data page after pairing:
+Both models verified from Hubitat's Device Data page after pairing. The command class lists are **identical** — the only difference between the 910 and 912 is the Device Id.
 
-| Field | Value | Hex |
+| Field | 910 | 912 |
 |---|---|---|
-| Manufacturer | 144 | 0x0090 (Kwikset / Spectrum Brands) |
-| Device Type | 3 | 0x0003 |
-| Device Id | 825 | 0x0339 |
-| Protocol | Z-Wave Plus | `0x5E` present in In Clusters |
-| Security | S2: 128 | 0x80 = S0 legacy security |
+| Manufacturer | 144 (0x0090) | 144 (0x0090) |
+| Device Type | 3 (0x0003) | 3 (0x0003) |
+| Device Id | 568 (0x0238) | 825 (0x0339) |
+| Protocol | Z-Wave Plus (`0x5E` in In Clusters) | Z-Wave Plus (`0x5E` in In Clusters) |
+| Security | S2: 128 (0x80 = S0 legacy) | S2: 128 (0x80 = S0 legacy) |
 
-The device is Z-Wave Plus (confirmed by `0x5E` ZWAVEPLUS_INFO in its cluster list) but pairs using S0 legacy security rather than S2 — common for Z-Wave Plus Gen 1 hardware that predates mandatory S2.
+Both devices are Z-Wave Plus Gen 1 hardware and pair using S0 legacy security rather than S2 — common for devices of this era that predate mandatory S2 certification.
 
 **Non-secured command classes:** `0x5E, 0x72, 0x5A, 0x98, 0x73, 0x7A`
 
@@ -88,21 +88,21 @@ The device is Z-Wave Plus (confirmed by `0x5E` ZWAVEPLUS_INFO in its cluster lis
 1. In Hubitat, go to **Drivers Code → + New Driver → Import**
 2. Paste this URL:
    ```
-   https://raw.githubusercontent.com/iamnof1/hubitat-kwikset-912-zwave/master/kwikset912-zwave-lock.groovy
+   https://raw.githubusercontent.com/iamnof1/hubitat-kwikset-910-912-zwave/master/kwikset910-912-zwave-lock.groovy
    ```
 3. Click **Import**, then **Save**
 
 ### Option B — Manual
 
-1. Open `kwikset912-zwave-lock.groovy` from this repo
+1. Open `kwikset910-912-zwave-lock.groovy` from this repo
 2. Copy the entire contents
 3. In Hubitat, go to **Drivers Code → + New Driver**
 4. Paste and click **Save**
 
 ### Assign the driver to your lock
 
-1. In Hubitat, go to **Devices** and open your Kwikset 912
-2. Change **Type** to `Kwikset 912 Z-Wave Lock`
+1. In Hubitat, go to **Devices** and open your Kwikset 910 or 912
+2. Change **Type** to `Kwikset 910/912 Z-Wave Plus Lock`
 3. Click **Save Device**
 4. Click **Configure** to push association settings to the lock and read initial state
 
@@ -122,7 +122,8 @@ The device is Z-Wave Plus (confirmed by `0x5E` ZWAVEPLUS_INFO in its cluster lis
 
 ### 2026-02-21
 
-- Initial release
+- Initial release (912 only)
+- Added 910 support — confirmed identical command class lists; only Device Id differs
 
 ---
 
