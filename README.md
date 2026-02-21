@@ -124,6 +124,7 @@ Both devices are Z-Wave Plus Gen 1 hardware and pair using S0 legacy security ra
 
 - Initial release (912 only)
 - Added 910 support — confirmed identical command class lists; only Device Id differs
+- Fixed code-set/delete verification: increased initial delay from 4 s to 8 s to accommodate S0 handshake overhead, and added up to 3 automatic retries (≈ 32 s total window) before declaring a set or delete as failed — resolves codes appearing stuck in "pending" when the lock's S0 round-trip exceeded the original timeout
 
 ---
 

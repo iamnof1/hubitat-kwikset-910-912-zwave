@@ -97,7 +97,10 @@
  *     voltage reading is available, so the chemistry-curve feature from the
  *     914 driver does not apply.  0xFF signals critically low battery.
  *   • Lock codes: Z-Wave USER_CODE_SET has no built-in response command; a
- *     USER_CODE_GET is sent a few seconds later to confirm the operation.
+ *     USER_CODE_GET is sent 8 s later to confirm the operation (8 s chosen to
+ *     allow S0 handshake overhead to complete).  If the slot still reads
+ *     opposite to expected, the driver retries up to 3 times (≈ 32 s total
+ *     window) before declaring success or failure.
  *   • Events: Notification V3 Report (0x71) replaces Zigbee's Operating /
  *     Programming Event Notifications.  The user-ID field comes from
  *     eventParameters[0] (V3 format) or v1AlarmLevel (V1 fallback).
@@ -287,7 +290,9 @@ def setCode(codeNumber, code, name = null) {
 
     def codeName = name ?: "Code ${codeNumber}"
     if (!state.pendingCodes) state.pendingCodes = [:]
-    state.pendingCodes["${codeNumber}"] = [name: codeName]
+    // retries: how many additional checkCodeSlot attempts to allow if the slot
+    // still reads as empty (S0 handshake overhead can exceed the initial delay).
+    state.pendingCodes["${codeNumber}"] = [name: codeName, retries: 3]
 
     // Z-Wave USER_CODE spec: each byte is the ASCII value of the digit (0x30–0x39).
     def userCode = code.bytes.collect { it & 0xFF }
@@ -297,14 +302,15 @@ def setCode(codeNumber, code, name = null) {
         hubitat.device.Protocol.ZWAVE))
 
     // USER_CODE_SET has no built-in response; verify by reading the slot back.
-    runIn(4, "checkCodeSlot", [data: [slot: codeNumber], overwrite: false])
+    // 8 s gives S0 handshake overhead time to complete before we check.
+    runIn(8, "checkCodeSlot", [data: [slot: codeNumber], overwrite: false])
 }
 
 def deleteCode(codeNumber) {
     if (logEnable) log.debug "${device.displayName}: deleteCode(${codeNumber})"
     codeNumber = codeNumber as int
     if (!state.pendingDeletes) state.pendingDeletes = [:]
-    state.pendingDeletes["${codeNumber}"] = true
+    state.pendingDeletes["${codeNumber}"] = [retries: 3]
 
     // userIdStatus=0 marks the slot as Available (erased)
     sendHubCommand(new hubitat.device.HubAction(
@@ -312,7 +318,7 @@ def deleteCode(codeNumber) {
             userId: codeNumber, userIdStatus: 0, userCode: [])),
         hubitat.device.Protocol.ZWAVE))
 
-    runIn(4, "checkCodeSlot", [data: [slot: codeNumber], overwrite: false])
+    runIn(8, "checkCodeSlot", [data: [slot: codeNumber], overwrite: false])
 }
 
 def getCodes() {
@@ -451,6 +457,13 @@ void zwaveEvent(hubitat.zwave.commands.notificationv3.NotificationReport cmd) {
  * userIdStatus == 1 → slot is occupied (set succeeded or code exists)
  * userIdStatus == 0 → slot is available (delete succeeded or never set)
  *
+ * S0 handshake overhead means the lock may not have finished processing a
+ * userCodeSet before the first verification GET comes back.  Both pending-set
+ * and pending-delete entries carry a retries counter; if the lock's response
+ * doesn't match the expected outcome we reschedule checkCodeSlot rather than
+ * immediately declaring success or failure.  Three retries × 8 s ≈ 32 s total
+ * window, which is well beyond any observed S0 round-trip time.
+ *
  * Note: for security, many locks zero out the actual PIN bytes in the report.
  * The status field is reliable even when the PIN bytes are redacted.
  */
@@ -462,8 +475,9 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
     def codes   = state.lockCodes      ?: [:]
 
     if (cmd.userIdStatus == 1) {
-        // Slot occupied — confirm a pending set or record a newly discovered code
+        // ── Slot is OCCUPIED ─────────────────────────────────────────────────
         if (pending[slot]) {
+            // Pending SET confirmed — the lock has the code
             def info = pending.remove(slot)
             state.pendingCodes = pending
             codes[slot] = [name: info.name]
@@ -472,33 +486,78 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
             if (txtEnable) log.info "${device.displayName}: code slot ${slot} (${info.name}) confirmed set"
             sendEvent(name: "codeChanged", value: "${slot} set",
                       descriptionText: "${device.displayName} code slot ${slot} set")
+
+        } else if (pendDel[slot]) {
+            // Pending DELETE but slot still occupied — lock may still be processing
+            def delInfo = pendDel[slot]
+            int retries = (delInfo instanceof Map ? (delInfo.retries ?: 0) : 0) as int
+            if (retries > 0) {
+                pendDel[slot] = [retries: retries - 1]
+                state.pendingDeletes = pendDel
+                log.warn "${device.displayName}: delete slot ${slot} not yet confirmed (${retries} retries left) — will retry"
+                runIn(8, "checkCodeSlot", [data: [slot: cmd.userId as int], overwrite: false])
+            } else {
+                pendDel.remove(slot)
+                state.pendingDeletes = pendDel
+                log.warn "${device.displayName}: code slot ${slot} delete FAILED — slot still occupied after retries"
+                sendEvent(name: "codeChanged", value: "${slot} failed",
+                          descriptionText: "${device.displayName} code slot ${slot} delete failed")
+            }
+
         } else if (!codes[slot]) {
-            // Code exists on lock but not tracked locally — add placeholder
+            // Code exists on the lock but was not tracked locally — add it.
+            // This covers codes set directly on the keypad or discovered after
+            // a hub restart; there is no name to recover so we use a placeholder.
             codes[slot] = [name: "Code ${cmd.userId}"]
             state.lockCodes = codes
             updateLockCodesAttribute(codes)
             sendEvent(name: "codeChanged", value: "${slot} set",
                       descriptionText: "${device.displayName} code slot ${slot} discovered")
         }
-    } else {
-        // Slot available — confirm a pending delete, or surface a set failure
-        pendDel.remove(slot)
-        state.pendingDeletes = pendDel
 
-        if (codes.containsKey(slot)) {
-            codes.remove(slot)
-            state.lockCodes = codes
-            updateLockCodesAttribute(codes)
+    } else {
+        // ── Slot is AVAILABLE (empty) ─────────────────────────────────────────
+        if (pendDel[slot]) {
+            // Pending DELETE confirmed — slot is now empty
+            pendDel.remove(slot)
+            state.pendingDeletes = pendDel
+            if (codes.containsKey(slot)) {
+                codes.remove(slot)
+                state.lockCodes = codes
+                updateLockCodesAttribute(codes)
+            }
             if (txtEnable) log.info "${device.displayName}: code slot ${slot} confirmed deleted"
             sendEvent(name: "codeChanged", value: "${slot} deleted",
                       descriptionText: "${device.displayName} code slot ${slot} deleted")
+
+        } else if (codes.containsKey(slot)) {
+            // Slot was tracked but the lock now reports it as empty (e.g., cleared
+            // directly on the keypad, or a delete propagated without a pending entry).
+            codes.remove(slot)
+            state.lockCodes = codes
+            updateLockCodesAttribute(codes)
+            if (txtEnable) log.info "${device.displayName}: code slot ${slot} found empty — removed from tracking"
+            sendEvent(name: "codeChanged", value: "${slot} deleted",
+                      descriptionText: "${device.displayName} code slot ${slot} deleted")
         }
+
         if (pending[slot]) {
-            def info = pending.remove(slot)
-            state.pendingCodes = pending
-            log.warn "${device.displayName}: code slot ${slot} (${info?.name}) set FAILED — slot is still empty"
-            sendEvent(name: "codeChanged", value: "${slot} failed",
-                      descriptionText: "${device.displayName} code slot ${slot} set failed")
+            // Pending SET but slot still empty — lock may still be processing the S0 command
+            def info = pending[slot]
+            int retries = (info.retries ?: 0) as int
+            if (retries > 0) {
+                info.retries = retries - 1
+                pending[slot] = info
+                state.pendingCodes = pending
+                log.warn "${device.displayName}: code slot ${slot} (${info.name}) not yet confirmed (${retries} retries left) — will retry"
+                runIn(8, "checkCodeSlot", [data: [slot: cmd.userId as int], overwrite: false])
+            } else {
+                def failInfo = pending.remove(slot)
+                state.pendingCodes = pending
+                log.warn "${device.displayName}: code slot ${slot} (${failInfo?.name}) set FAILED — slot still empty after retries"
+                sendEvent(name: "codeChanged", value: "${slot} failed",
+                          descriptionText: "${device.displayName} code slot ${slot} set failed")
+            }
         }
     }
 }
