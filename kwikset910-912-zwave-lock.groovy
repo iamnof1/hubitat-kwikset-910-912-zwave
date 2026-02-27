@@ -66,7 +66,7 @@
  *   Notification V3 — Access Control (type 6):
  *     event  1 / 2  → Manual lock / unlock
  *     event  3 / 4  → RF lock / unlock (hub-initiated)
- *     event  5 / 6  → Keypad lock / unlock  (eventParameters[0] = user ID)
+ *     event  5 / 6  → Keypad lock / unlock  (eventParameter[0] = user ID)
  *     event  9      → Auto-lock engaged
  *     event 11      → Lock jammed
  *
@@ -78,7 +78,7 @@
  *     type  9  → Deadbolt jammed
  *     type 11  → Front escutcheon tamper
  *     type 13  → Too many wrong code attempts (tamper)
- *     type 16  → All codes cleared externally
+ *     type 16  → Code table changed (sent after any code add/delete — NOT "all cleared")
  *     type 17  → Duplicate code rejected
  *     type 18  → Keypad lock    (alarmLevel = user ID)
  *     type 19  → Keypad unlock  (alarmLevel = user ID)
@@ -103,7 +103,7 @@
  *     window) before declaring success or failure.
  *   • Events: Notification V3 Report (0x71) replaces Zigbee's Operating /
  *     Programming Event Notifications.  The user-ID field comes from
- *     eventParameters[0] (V3 format) or v1AlarmLevel (V1 fallback).
+ *     eventParameter[0] (V3 format) or v1AlarmLevel (V1 fallback).
  *   • Security: Device uses S0 (0x98) despite advertising Z-Wave Plus (0x5E).
  *     zwaveSecureEncap() handles this correctly on Hubitat C8 Pro.
  *
@@ -156,6 +156,7 @@ metadata {
         attribute "lockJammed",   "string"   // "detected" | "clear"
         attribute "tamperAlert",  "string"   // "detected" | "clear"
         attribute "lastCodeName", "string"   // name of the user who last operated the lock
+        attribute "codeLength",   "number"   // reported when setCodeLength() is called
 
         command "clearCodes", []   // clears all PIN codes from the lock AND local state
 
@@ -295,10 +296,11 @@ def setCode(codeNumber, code, name = null) {
     state.pendingCodes["${codeNumber}"] = [name: codeName, retries: 3]
 
     // Z-Wave USER_CODE spec: each byte is the ASCII value of the digit (0x30–0x39).
-    def userCode = code.bytes.collect { it & 0xFF }
+    // Use toString() defensively in case the caller passes a non-String type.
+    def userCode = code.toString().bytes.collect { it & 0xFF }
     sendHubCommand(new hubitat.device.HubAction(
         zwaveSecureEncap(zwave.userCodeV1.userCodeSet(
-            userId: codeNumber, userIdStatus: 1, userCode: userCode)),
+            userIdentifier: codeNumber, userIdStatus: 1, userCode: userCode)),
         hubitat.device.Protocol.ZWAVE))
 
     // USER_CODE_SET has no built-in response; verify by reading the slot back.
@@ -309,13 +311,17 @@ def setCode(codeNumber, code, name = null) {
 def deleteCode(codeNumber) {
     if (logEnable) log.debug "${device.displayName}: deleteCode(${codeNumber})"
     codeNumber = codeNumber as int
+    if (codeNumber < 1 || codeNumber > (maxCodes ?: 30)) {
+        log.warn "${device.displayName}: code slot ${codeNumber} out of range (1..${maxCodes ?: 30})"
+        return
+    }
     if (!state.pendingDeletes) state.pendingDeletes = [:]
     state.pendingDeletes["${codeNumber}"] = [retries: 3]
 
     // userIdStatus=0 marks the slot as Available (erased)
     sendHubCommand(new hubitat.device.HubAction(
         zwaveSecureEncap(zwave.userCodeV1.userCodeSet(
-            userId: codeNumber, userIdStatus: 0, userCode: [])),
+            userIdentifier: codeNumber, userIdStatus: 0, userCode: [])),
         hubitat.device.Protocol.ZWAVE))
 
     runIn(8, "checkCodeSlot", [data: [slot: codeNumber], overwrite: false])
@@ -352,7 +358,7 @@ def clearCodes() {
     List cmds = []
     slots.each { slot ->
         cmds << zwaveSecureEncap(zwave.userCodeV1.userCodeSet(
-            userId: slot, userIdStatus: 0, userCode: []))
+            userIdentifier: slot, userIdStatus: 0, userCode: []))
     }
     sendHubCommand(new hubitat.device.HubMultiAction(
         delayBetween(cmds, 500), hubitat.device.Protocol.ZWAVE))
@@ -368,7 +374,7 @@ def clearCodes() {
 void checkCodeSlot(Map data) {
     if (logEnable) log.debug "${device.displayName}: checkCodeSlot — reading slot ${data.slot}"
     sendHubCommand(new hubitat.device.HubAction(
-        zwaveSecureEncap(zwave.userCodeV1.userCodeGet(userId: data.slot as int)),
+        zwaveSecureEncap(zwave.userCodeV1.userCodeGet(userIdentifier: data.slot as int)),
         hubitat.device.Protocol.ZWAVE))
 }
 
@@ -443,7 +449,7 @@ void zwaveEvent(hubitat.zwave.commands.notificationv3.NotificationReport cmd) {
     if (cmd.notificationType && cmd.notificationType != 0) {
         parseNotificationEvent(cmd.notificationType as int,
                                cmd.event as int,
-                               cmd.eventParameters ?: [])
+                               cmd.eventParameter ?: [])
     } else if (cmd.v1AlarmType && cmd.v1AlarmType != 0) {
         parseAlarmV1Event(cmd.v1AlarmType as int, cmd.v1AlarmLevel as int)
     } else {
@@ -468,8 +474,8 @@ void zwaveEvent(hubitat.zwave.commands.notificationv3.NotificationReport cmd) {
  * The status field is reliable even when the PIN bytes are redacted.
  */
 void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
-    if (logEnable) log.debug "${device.displayName}: UserCodeReport userId=${cmd.userId} status=${cmd.userIdStatus}"
-    def slot    = cmd.userId.toString()
+    if (logEnable) log.debug "${device.displayName}: UserCodeReport userId=${cmd.userIdentifier} status=${cmd.userIdStatus}"
+    def slot    = cmd.userIdentifier.toString()
     def pending = state.pendingCodes   ?: [:]
     def pendDel = state.pendingDeletes ?: [:]
     def codes   = state.lockCodes      ?: [:]
@@ -495,7 +501,7 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
                 pendDel[slot] = [retries: (retries - 1)]
                 state.pendingDeletes = pendDel
                 log.warn "${device.displayName}: delete slot ${slot} not yet confirmed (${retries} retries left) — will retry"
-                runIn(8, "checkCodeSlot", [data: [slot: cmd.userId as int], overwrite: false])
+                runIn(8, "checkCodeSlot", [data: [slot: cmd.userIdentifier as int], overwrite: false])
             } else {
                 pendDel.remove(slot)
                 state.pendingDeletes = pendDel
@@ -508,7 +514,7 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
             // Code exists on the lock but was not tracked locally — add it.
             // This covers codes set directly on the keypad or discovered after
             // a hub restart; there is no name to recover so we use a placeholder.
-            codes[slot] = [name: "Code ${cmd.userId}"]
+            codes[slot] = [name: "Code ${cmd.userIdentifier}"]
             state.lockCodes = codes
             updateLockCodesAttribute(codes)
             sendEvent(name: "codeChanged", value: "${slot} set",
@@ -530,6 +536,28 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
             sendEvent(name: "codeChanged", value: "${slot} deleted",
                       descriptionText: "${device.displayName} code slot ${slot} deleted")
 
+        } else if (pending[slot]) {
+            // Pending SET but slot still empty — lock may still be processing the S0 command.
+            // This branch must be checked before codes.containsKey() so that a stale codes
+            // entry from a prior session does not fire a spurious "deleted" event while a
+            // set is in flight (the stale entry will be overwritten on success anyway).
+            def info = pending[slot]
+            def codeName = info.name as String
+            int retries = (info.retries ?: 0) as int
+            if (retries > 0) {
+                // Rebuild the map explicitly to avoid Hubitat state serialization dropping keys
+                pending[slot] = [name: codeName, retries: retries - 1]
+                state.pendingCodes = pending
+                log.warn "${device.displayName}: code slot ${slot} (${codeName}) not yet confirmed (${retries} retries left) — will retry"
+                runIn(8, "checkCodeSlot", [data: [slot: cmd.userIdentifier as int], overwrite: false])
+            } else {
+                pending.remove(slot)
+                state.pendingCodes = pending
+                log.warn "${device.displayName}: code slot ${slot} (${codeName}) set FAILED — slot still empty after retries"
+                sendEvent(name: "codeChanged", value: "${slot} failed",
+                          descriptionText: "${device.displayName} code slot ${slot} set failed")
+            }
+
         } else if (codes.containsKey(slot)) {
             // Slot was tracked but the lock now reports it as empty (e.g., cleared
             // directly on the keypad, or a delete propagated without a pending entry).
@@ -539,26 +567,6 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
             if (txtEnable) log.info "${device.displayName}: code slot ${slot} found empty — removed from tracking"
             sendEvent(name: "codeChanged", value: "${slot} deleted",
                       descriptionText: "${device.displayName} code slot ${slot} deleted")
-        }
-
-        if (pending[slot]) {
-            // Pending SET but slot still empty — lock may still be processing the S0 command
-            def info = pending[slot]
-            def codeName = info.name as String
-            int retries = (info.retries ?: 0) as int
-            if (retries > 0) {
-                // Rebuild the map explicitly to avoid Hubitat state serialization dropping keys
-                pending[slot] = [name: codeName, retries: retries - 1]
-                state.pendingCodes = pending
-                log.warn "${device.displayName}: code slot ${slot} (${codeName}) not yet confirmed (${retries} retries left) — will retry"
-                runIn(8, "checkCodeSlot", [data: [slot: cmd.userId as int], overwrite: false])
-            } else {
-                pending.remove(slot)
-                state.pendingCodes = pending
-                log.warn "${device.displayName}: code slot ${slot} (${codeName}) set FAILED — slot still empty after retries"
-                sendEvent(name: "codeChanged", value: "${slot} failed",
-                          descriptionText: "${device.displayName} code slot ${slot} set failed")
-            }
         }
     }
 }
@@ -584,7 +592,9 @@ void zwaveEvent(hubitat.zwave.commands.manufacturerspecificv2.ManufacturerSpecif
 }
 
 // Version Report — informational
-void zwaveEvent(hubitat.zwave.commands.versionv1.VersionReport cmd) {
+// Handler typed as v2 to match CMD_CLASS_VERSIONS[0x86: 2]; a v1 handler would
+// never fire because zwave.parse() produces a versionv2 object for this device.
+void zwaveEvent(hubitat.zwave.commands.versionv2.VersionReport cmd) {
     if (logEnable) log.debug "${device.displayName}: VersionReport: ${cmd}"
 }
 
@@ -652,12 +662,11 @@ private void parseAlarmV1Event(int alarmType, int alarmLevel) {
                       descriptionText: "${device.displayName}: tamper detected (alarm type ${alarmType})")
             break
 
-        case 16:  // All user codes cleared externally (on the lock itself)
-            state.lockCodes = [:]
-            updateLockCodesAttribute([:])
-            sendEvent(name: "codeChanged", value: "all deleted",
-                      descriptionText: "${device.displayName}: all codes cleared on lock")
-            if (txtEnable) log.info "${device.displayName}: all codes cleared externally"
+        case 16:  // "Code table changed" notification — sent by Kwikset 910/912 after ANY
+                  // code add/modify/delete, NOT only when all codes are cleared.
+                  // We do NOT wipe state.lockCodes here; code state is managed through
+                  // the pendingCodes / pendingDeletes flow and UserCodeReport responses.
+            if (logEnable) log.debug "${device.displayName}: alarm 16 — code table changed (ignored; state managed via UserCodeReport)"
             break
 
         case 17:  // Duplicate code rejected by lock
