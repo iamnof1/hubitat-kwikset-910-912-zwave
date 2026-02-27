@@ -469,7 +469,7 @@ void zwaveEvent(hubitat.zwave.commands.notificationv3.NotificationReport cmd) {
  */
 void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
     if (logEnable) log.debug "${device.displayName}: UserCodeReport userId=${cmd.userId} status=${cmd.userIdStatus}"
-    def slot    = "${cmd.userId}"
+    def slot    = cmd.userId.toString()
     def pending = state.pendingCodes   ?: [:]
     def pendDel = state.pendingDeletes ?: [:]
     def codes   = state.lockCodes      ?: [:]
@@ -492,7 +492,7 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
             def delInfo = pendDel[slot]
             int retries = (delInfo instanceof Map ? (delInfo.retries ?: 0) : 0) as int
             if (retries > 0) {
-                pendDel[slot] = [retries: retries - 1]
+                pendDel[slot] = [retries: (retries - 1)]
                 state.pendingDeletes = pendDel
                 log.warn "${device.displayName}: delete slot ${slot} not yet confirmed (${retries} retries left) — will retry"
                 runIn(8, "checkCodeSlot", [data: [slot: cmd.userId as int], overwrite: false])
@@ -544,17 +544,18 @@ void zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
         if (pending[slot]) {
             // Pending SET but slot still empty — lock may still be processing the S0 command
             def info = pending[slot]
+            def codeName = info.name as String
             int retries = (info.retries ?: 0) as int
             if (retries > 0) {
-                info.retries = retries - 1
-                pending[slot] = info
+                // Rebuild the map explicitly to avoid Hubitat state serialization dropping keys
+                pending[slot] = [name: codeName, retries: retries - 1]
                 state.pendingCodes = pending
-                log.warn "${device.displayName}: code slot ${slot} (${info.name}) not yet confirmed (${retries} retries left) — will retry"
+                log.warn "${device.displayName}: code slot ${slot} (${codeName}) not yet confirmed (${retries} retries left) — will retry"
                 runIn(8, "checkCodeSlot", [data: [slot: cmd.userId as int], overwrite: false])
             } else {
-                def failInfo = pending.remove(slot)
+                pending.remove(slot)
                 state.pendingCodes = pending
-                log.warn "${device.displayName}: code slot ${slot} (${failInfo?.name}) set FAILED — slot still empty after retries"
+                log.warn "${device.displayName}: code slot ${slot} (${codeName}) set FAILED — slot still empty after retries"
                 sendEvent(name: "codeChanged", value: "${slot} failed",
                           descriptionText: "${device.displayName} code slot ${slot} set failed")
             }
